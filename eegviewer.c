@@ -15,8 +15,11 @@
  */
 
 #include <sys/types.h>
+#include <sys/time.h>
 
+#include <complex.h>
 #include <err.h>
+#include <math.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,10 +37,11 @@ static void	usage(void);
 #endif
 
 static struct channel {
-	uint16_t	values[16384];
-	uint16_t	count;
+	uint16_t		values[16384];
+	uint16_t		count;
 	xcb_gcontext_t	gc;
 } channels[6];
+static int opt_channels = 0;
 
 static uint32_t
 rgb_pixel(const char *rgb)
@@ -62,8 +66,8 @@ init_channels(xcb_connection_t *c, xcb_window_t win)
 		rgb_pixel("#0000ff"),
 		rgb_pixel("#00ff00"),
 		rgb_pixel("#ff0000"),
-		rgb_pixel("#f0f0f0"),
-		rgb_pixel("#0f0f0f"),
+		rgb_pixel("#ff00ff"),
+		rgb_pixel("#00ff00"),
 		rgb_pixel("#335599"),
 	};
 	size_t	i;
@@ -80,17 +84,33 @@ channels_draw(xcb_connection_t *c, xcb_window_t win, uint16_t height, uint16_t w
 	size_t		i;
 	size_t		j;
 	uint16_t	offset;
-	uint16_t	ratio = 0xFFFF / height ? 0xFFF / height : 1;
-	xcb_point_t     point[width];
+	xcb_point_t	point[nitems(channels)][width];
+
+	for (i = 0; i < nitems(channels); ++i) {
+		for (j = 0; j < width; ++j) {
+			offset = 0;
+			if (channels[i].count >= width)
+				offset = channels[i].count-width;
+
+			if (channels[i].count >= width ||
+				(channels[i].count < width && j < channels[i].count)) {
+					if (j != 0) {
+						point[i][j].x = 1;
+						point[i][j].y = channels[i].values[offset+j] - channels[i].values[offset+j-1];
+					}
+					else {
+						point[i][j].x = j;
+						point[i][j].y = channels[i].values[offset+j];
+					}
+			}
+		}
+	}
 
 	xcb_clear_area (c, 0, win, 0, 0, width, height);
 	for (i = 0; i < nitems(channels); ++i) {
-		offset = (channels[i].count < width) ? 0 : channels[i].count - width;
-		for (j = 0; j < width; ++j) {
-			point[j].x = j;
-			point[j].y = height - (channels[i].values[offset + j] / ratio);
-		}
-		xcb_poly_point(c, XCB_COORD_MODE_ORIGIN, win, channels[i].gc, width, point);
+		if (opt_channels && (opt_channels & 1<<i)==0)
+			continue;
+		xcb_poly_line(c, XCB_COORD_MODE_PREVIOUS, win, channels[i].gc, width, point[i]);
 	}
 }
 
@@ -165,8 +185,40 @@ main(int argc, char *argv[])
 	uint16_t			 height;
 	xcb_generic_event_t *e;
 
-	if (argc != 1)
-		usage();
+	int ch;
+	int opt_height = -1;
+	int opt_width = -1;
+
+	while ((ch = getopt(argc, argv, "123456h:w:")) != -1) {
+		switch (ch) {
+			case '1':
+				opt_channels |= 1<<0;
+				break;
+			case '2':
+				opt_channels |= 1<<1;
+				break;
+			case '3':
+				opt_channels |= 1<<2;
+				break;
+			case '4':
+				opt_channels |= 1<<3;
+				break;
+			case '5':
+				opt_channels |= 1<<4;
+				break;
+			case '6':
+				opt_channels |= 1<<5;
+				break;
+			case 'h':
+				opt_height = atoi(optarg);
+				break;
+			case 'w':
+				opt_width = atoi(optarg);
+				break;
+			default:
+				usage();
+		}
+	}
 
 	c = xcb_connect(NULL, NULL);
 
@@ -176,8 +228,8 @@ main(int argc, char *argv[])
 	mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
 	values[0] = screen->black_pixel;
 	values[1] = XCB_EVENT_MASK_EXPOSURE;
-	width = screen->width_in_pixels;
-	height = screen->height_in_pixels;
+	width = opt_width == -1 ? screen->width_in_pixels : opt_width;
+	height = opt_height == -1 ? screen->height_in_pixels : opt_height;
 	xcb_create_window (c,
 	    XCB_COPY_FROM_PARENT,
 	    win,
@@ -201,16 +253,6 @@ main(int argc, char *argv[])
 	pfd[1].events = POLLIN;
 
 	while (poll(pfd, 2, 0) != -1) {
-#if 0
-		{
-			struct timespec ts;
-			struct timespec tr;
-
-			ts.tv_sec = 0;
-			ts.tv_nsec = 10;
-			nanosleep(&ts, &tr);
-		}
-#endif
 		if ((pfd[0].revents & (POLLIN|POLLHUP))) {
 			linelen = getline(&line, &linesize, stdin);
 			if (linelen == -1)

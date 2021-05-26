@@ -1,11 +1,10 @@
 PROG=	eegviewer
 
 SRCS=	eegviewer.c
-NOMAN=
+OBJS=	$(SRCS:.c=.o)
 BINDIR=		/usr/local/bin
 
 LDADD+=	-L/usr/X11R6/lib -lxcb
-DPADD+=	${LIBXCB}
 
 CFLAGS+=	-I/usr/X11R6/include
 CFLAGS+=	-fstack-protector-all
@@ -16,4 +15,11 @@ CFLAGS+=	-Wsign-compare
 CFLAGS+=	-Werror-implicit-function-declaration
 CFLAGS+=	-Werror # during development phase (breaks some archs)
 
-.include <bsd.prog.mk>
+@: $(OBJS)
+	$(CC) $(CFLAGS) -o $(PROG) $(OBJS) $(LDADD) 
+
+clean:
+	rm -f $(PROG) $(OBJS)
+
+install: $(PROG)
+	install -m 111 $(PROG) $(BINDIR)
