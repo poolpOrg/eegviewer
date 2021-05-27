@@ -36,8 +36,11 @@ static void	usage(void);
 #define nitems(_a) (sizeof((_a)) / sizeof((_a)[0]))
 #endif
 
+xcb_gcontext_t	tsplit_gc;
+
 static struct channel {
 	uint16_t		values[16384];
+	time_t			tframe[16384];
 	uint16_t		count;
 	xcb_gcontext_t	gc;
 } channels[6];
@@ -70,12 +73,17 @@ init_channels(xcb_connection_t *c, xcb_window_t win)
 		rgb_pixel("#00ff00"),
 		rgb_pixel("#335599"),
 	};
+	uint32_t	white;
 	size_t	i;
 
 	for (i = 0; i < nitems(channels); ++i) {
 		channels[i].gc = xcb_generate_id(c);
 		xcb_create_gc(c, channels[i].gc, win, mask, &values[i]);
 	}
+
+	tsplit_gc = xcb_generate_id(c);
+	white = rgb_pixel("#ffffff");
+	xcb_create_gc(c, tsplit_gc, win, mask, &white);
 }
 
 static void
@@ -84,23 +92,32 @@ channels_draw(xcb_connection_t *c, xcb_window_t win, uint16_t height, uint16_t w
 	size_t		i;
 	size_t		j;
 	uint16_t	offset;
-	xcb_point_t	point[nitems(channels)][width];
+	xcb_point_t	points[nitems(channels)][width];
+	xcb_point_t	tsplits[width/30][2];
+	size_t tsplits_off = 0;
 
 	for (i = 0; i < nitems(channels); ++i) {
 		for (j = 0; j < width; ++j) {
 			offset = 0;
 			if (channels[i].count >= width)
 				offset = channels[i].count-width;
-
 			if (channels[i].count >= width ||
 				(channels[i].count < width && j < channels[i].count)) {
 					if (j != 0) {
-						point[i][j].x = 1;
-						point[i][j].y = channels[i].values[offset+j] - channels[i].values[offset+j-1];
+						points[i][j].x = 1;
+						points[i][j].y = channels[i].values[offset+j] - channels[i].values[offset+j-1];
 					}
 					else {
-						point[i][j].x = j;
-						point[i][j].y = channels[i].values[offset+j];
+						points[i][j].x = j;
+						points[i][j].y = channels[i].values[offset+j];
+					}
+
+					if (i == 0 && j != 0 && channels[i].tframe[j+offset] != channels[i].tframe[j+offset-1]) {
+						tsplits[tsplits_off][0].x = j;
+						tsplits[tsplits_off][0].y = 0;
+						tsplits[tsplits_off][1].x = j;
+						tsplits[tsplits_off][1].y = height;
+						tsplits_off++;
 					}
 			}
 		}
@@ -110,7 +127,10 @@ channels_draw(xcb_connection_t *c, xcb_window_t win, uint16_t height, uint16_t w
 	for (i = 0; i < nitems(channels); ++i) {
 		if (opt_channels && (opt_channels & 1<<i)==0)
 			continue;
-		xcb_poly_line(c, XCB_COORD_MODE_PREVIOUS, win, channels[i].gc, width, point[i]);
+		xcb_poly_line(c, XCB_COORD_MODE_PREVIOUS, win, channels[i].gc, width, points[i]);
+	}
+	for (i = 0; i < tsplits_off; ++i) {
+		xcb_poly_line(c, XCB_COORD_MODE_ORIGIN, win, tsplit_gc, 2, tsplits[i]);	
 	}
 }
 
@@ -122,18 +142,26 @@ push_line(char *line, ssize_t linelen)
 	const char *errstr;
 	size_t	i;
 	char	*values[6];
+	char	tbuf[16];
+	time_t	tm;
 
 	p = line;
 
-	/* skip cycle */
+	/* skip timestamp */
 	if ((p = strchr(p, '|')) == NULL)
 		return;
+	strlcpy(tbuf, line, sizeof tbuf);
+	tm = atol(tbuf) / 100000;
 
 	/* skip version */
 	if ((p = strchr(p+1, '|')) == NULL)
 		return;
-	p += 1;
 
+	/* skip cycle */
+	if ((p = strchr(p+2, '|')) == NULL)
+		return;
+	p += 1;
+	
 	for (i = 0; i < nitems(values); ++i) {
 		if ((endp = strchr(p, '|')) == NULL)
 			return;
@@ -147,8 +175,12 @@ push_line(char *line, ssize_t linelen)
 			memmove(channels[i].values,
 			    channels[i].values + 1,
 			    sizeof (channels[i].values) - 1);
+			memmove(channels[i].tframe,
+			    channels[i].tframe + 1,
+			    sizeof (channels[i].tframe) - 1);
 		}
 
+		channels[i].tframe[channels[i].count] = tm;
 		channels[i].values[channels[i].count] = strtonum(values[i], 0, 65536, &errstr);
 		if (errstr)
 			return;
