@@ -1,4 +1,7 @@
 # eegviewer
+
+## DISCONTINUED, HERE FOR ARCHIVES
+
 data viewer for the OpenEEG firmware v2 protocol
 
 this is a work in progress utility to generate a graph from
